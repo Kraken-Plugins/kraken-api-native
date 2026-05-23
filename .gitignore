@@ -1,6 +1,12 @@
 # Prerequisites
 *.d
 
+.idea
+*.iml
+.idea/*
+.env
+.DS_STORE
+
 # Compiled Object files
 *.slo
 *.lo
