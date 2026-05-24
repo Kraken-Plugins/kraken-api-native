@@ -1,12 +1,19 @@
-add_executable(launcher main.cpp)
-
-# After building, copy the DLL next to the launcher exe
-add_custom_command(TARGET launcher POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy
-        $<TARGET_FILE:plugin-core>   # plugin-core.dll output path
-        $<TARGET_FILE_DIR:launcher>  # launcher.exe output dir
-        COMMENT "Copying plugin-core.dll next to launcher..."
+add_executable(launcher
+        main.cpp
+        dll_injector.cpp
+        dll_injector.hpp
+        process_launcher.cpp
+        process_launcher.hpp
+        win32_handle.hpp
 )
 
+target_compile_definitions(launcher PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+
 add_dependencies(launcher plugin-core)
-target_link_libraries(launcher PRIVATE)
+
+add_custom_command(TARGET launcher POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_FILE:plugin-core>
+        $<TARGET_FILE_DIR:launcher>
+        COMMENT "Copying plugin-core.dll next to launcher..."
+)

@@ -1,36 +1,72 @@
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 #include <Windows.h>
-#include <iostream>
-#include <thread>
 
-// This is the actual plugin logic — runs in its own thread
-// so it doesn't block DllMain
-void PluginMain() {
-    AllocConsole();
-    FILE* f;
-    freopen_s(&f, "CONOUT$", "w", stdout);
-    freopen_s(&f, "CONOUT$", "w", stderr);
+#include "hooks.hpp"
+#include "logger.hpp"
+#include "offsets.hpp"
+#include "patcher.hpp"
 
-    std::cout << "==============================\n";
-    std::cout << "  plugin-core loaded!         \n";
-    std::cout << "  DLL injection is working.   \n";
-    std::cout << "==============================\n\n";
+namespace {
 
-    // Keep the thread alive — later this becomes your main loop
-    // (reading game state, running plugin tick, etc.)
-    int tick = 0;
-    while (true) {
-        std::cout << "[tick " << tick++ << "] Plugin running...\n";
-        Sleep(5000); // print every 5 seconds for now
-    }
+bool ApplyInitialPatches() {
+    const std::uintptr_t patchAddress =
+        kraken::plugin::Patcher::FromRva(
+            kraken::plugin::offsets::kInitialNopPatchRva);
+
+    return kraken::plugin::Patcher::Nop(patchAddress, 2);
 }
 
-// Windows calls this automatically when the DLL is loaded/unloaded
-BOOL APIENTRY DllMain(HMODULE hModule,
-                      DWORD   reason,
-                      LPVOID  /*reserved*/) {
-    if (reason == DLL_PROCESS_ATTACH) {
-        DisableThreadLibraryCalls(hModule);
-        std::thread(PluginMain).detach();
+void PluginMain() {
+    kraken::plugin::InitializeConsole();
+
+    kraken::plugin::LogInfo("==============================");
+    kraken::plugin::LogInfo("plugin-core loaded.");
+    kraken::plugin::LogInfo("DLL injection is working.");
+    kraken::plugin::LogInfo("==============================");
+
+    kraken::plugin::LogInfo("Applying patches...");
+    if (!ApplyInitialPatches()) {
+        kraken::plugin::LogError("Initial patch failed.");
+        return;
     }
+
+    if (!kraken::plugin::InstallLogHook()) {
+        kraken::plugin::LogError("Log hook installation failed.");
+        return;
+    }
+
+    kraken::plugin::LogInfo("Patches applied.");
+}
+
+DWORD WINAPI PluginThread(LPVOID) {
+    PluginMain();
+    return 0;
+}
+
+} // namespace
+
+BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID) {
+    if (reason == DLL_PROCESS_ATTACH) {
+        DisableThreadLibraryCalls(module);
+
+        HANDLE thread = CreateThread(
+            nullptr,
+            0,
+            PluginThread,
+            nullptr,
+            0,
+            nullptr);
+
+        if (thread != nullptr) {
+            CloseHandle(thread);
+        }
+    }
+
     return TRUE;
 }
