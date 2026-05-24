@@ -6,7 +6,6 @@
 
 #include <cstdint>
 #include <cwchar>
-#include <iostream>
 #include <string>
 
 namespace kraken::launcher {
@@ -54,9 +53,19 @@ private:
     void* address_ = nullptr;
 };
 
-void LogLastError(const char* action) {
-    std::cerr << "[!] " << action << " failed with Win32 error "
-              << GetLastError() << "\n";
+std::string LastErrorMessage(const char* action) {
+    return std::string(action) + " failed with Win32 error " +
+           std::to_string(GetLastError());
+}
+
+void SetError(std::string* errorMessage, std::string message) {
+    if (errorMessage != nullptr) {
+        *errorMessage = message;
+    }
+}
+
+void SetLastErrorMessage(std::string* errorMessage, const char* action) {
+    SetError(errorMessage, LastErrorMessage(action));
 }
 
 UniqueHandle CreateModuleSnapshot(DWORD processId) {
@@ -81,16 +90,16 @@ UniqueHandle CreateModuleSnapshot(DWORD processId) {
         processId));
 }
 
-void* ResolveRemoteLoadLibraryW(DWORD processId) {
+void* ResolveRemoteLoadLibraryW(DWORD processId, std::string* errorMessage) {
     HMODULE localKernel32 = GetModuleHandleW(L"kernel32.dll");
     if (localKernel32 == nullptr) {
-        LogLastError("GetModuleHandleW(kernel32.dll)");
+        SetLastErrorMessage(errorMessage, "GetModuleHandleW(kernel32.dll)");
         return nullptr;
     }
 
     FARPROC localLoadLibrary = GetProcAddress(localKernel32, "LoadLibraryW");
     if (localLoadLibrary == nullptr) {
-        LogLastError("GetProcAddress(LoadLibraryW)");
+        SetLastErrorMessage(errorMessage, "GetProcAddress(LoadLibraryW)");
         return nullptr;
     }
 
@@ -100,7 +109,7 @@ void* ResolveRemoteLoadLibraryW(DWORD processId) {
 
     UniqueHandle snapshot = CreateModuleSnapshot(processId);
     if (!snapshot) {
-        LogLastError("CreateToolhelp32Snapshot");
+        SetLastErrorMessage(errorMessage, "CreateToolhelp32Snapshot");
         return nullptr;
     }
 
@@ -115,7 +124,8 @@ void* ResolveRemoteLoadLibraryW(DWORD processId) {
         }
     }
 
-    std::cerr << "[!] Could not find kernel32.dll in target process modules.\n";
+    SetError(errorMessage,
+             "Could not find kernel32.dll in target process modules.");
     return nullptr;
 }
 
@@ -124,9 +134,10 @@ void* ResolveRemoteLoadLibraryW(DWORD processId) {
 bool DllInjector::Inject(HANDLE process,
                          DWORD processId,
                          const std::filesystem::path& dllPath,
-                         std::chrono::milliseconds timeout) {
+                         std::chrono::milliseconds timeout,
+                         std::string* errorMessage) {
     if (!std::filesystem::exists(dllPath)) {
-        std::cerr << "[!] DLL does not exist: " << dllPath.string() << "\n";
+        SetError(errorMessage, "DLL does not exist: " + dllPath.string());
         return false;
     }
 
@@ -136,7 +147,7 @@ bool DllInjector::Inject(HANDLE process,
 
     RemoteAllocation remoteMemory(process, remotePathBytes);
     if (!remoteMemory) {
-        LogLastError("VirtualAllocEx");
+        SetLastErrorMessage(errorMessage, "VirtualAllocEx");
         return false;
     }
 
@@ -149,11 +160,11 @@ bool DllInjector::Inject(HANDLE process,
         &bytesWritten);
 
     if (!wroteMemory || bytesWritten != remotePathBytes) {
-        LogLastError("WriteProcessMemory");
+        SetLastErrorMessage(errorMessage, "WriteProcessMemory");
         return false;
     }
 
-    void* loadLibrary = ResolveRemoteLoadLibraryW(processId);
+    void* loadLibrary = ResolveRemoteLoadLibraryW(processId, errorMessage);
     if (loadLibrary == nullptr) {
         return false;
     }
@@ -168,7 +179,7 @@ bool DllInjector::Inject(HANDLE process,
         nullptr));
 
     if (!remoteThread) {
-        LogLastError("CreateRemoteThread");
+        SetLastErrorMessage(errorMessage, "CreateRemoteThread");
         return false;
     }
 
@@ -177,29 +188,29 @@ bool DllInjector::Inject(HANDLE process,
         static_cast<DWORD>(timeout.count()));
 
     if (waitResult == WAIT_TIMEOUT) {
-        std::cerr << "[!] Timed out waiting for LoadLibraryW to finish. "
-                  << "Remote memory was intentionally left allocated.\n";
+        SetError(errorMessage,
+                 "Timed out waiting for LoadLibraryW to finish. Remote "
+                 "memory was intentionally left allocated.");
         remoteMemory.ReleaseWithoutFreeing();
         return false;
     }
 
     if (waitResult != WAIT_OBJECT_0) {
-        LogLastError("WaitForSingleObject");
+        SetLastErrorMessage(errorMessage, "WaitForSingleObject");
         return false;
     }
 
     DWORD exitCode = 0;
     if (!GetExitCodeThread(remoteThread.Get(), &exitCode)) {
-        LogLastError("GetExitCodeThread");
+        SetLastErrorMessage(errorMessage, "GetExitCodeThread");
         return false;
     }
 
     if (exitCode == 0) {
-        std::cerr << "[!] LoadLibraryW returned null inside the client.\n";
+        SetError(errorMessage, "LoadLibraryW returned null inside the client.");
         return false;
     }
 
-    std::cout << "[+] DLL injected successfully.\n";
     return true;
 }
 

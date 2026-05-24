@@ -4,7 +4,7 @@
   <h3 align="center">Kraken API Native</h3>
 
   <p align="center">
-    A native C++ foundation for launching, instrumenting, and experimenting with the Old School RuneScape Windows client.
+    A native C++ launcher and injected plugin core for experimenting with the Old School RuneScape Windows client.
     <br />
   </p>
 </div>
@@ -17,10 +17,9 @@
 
 # Getting Started
 
-Kraken API Native is an early-stage C++ project for working with the native
-Windows Old School RuneScape client. It currently provides a launcher,
-DLL injection, a debug console, memory patch helpers, and a MinHook-based log
-hook foundation.
+Kraken API Native is an early-stage C++ project for launching the native Old
+School RuneScape Windows client, injecting a DLL, and applying native patches
+and hooks from inside the client process.
 
 This project is for educational plugin/API development only. It is not meant
 for botting, automation, account rule-breaking, malware, or bypass tooling.
@@ -36,39 +35,29 @@ git clone https://github.com/cbartram/kraken-api-native
 cd kraken-api-native
 
 cmake -S . -B cmake-build-debug -G "Visual Studio 17 2022" -A x64
-cmake --build cmake-build-debug --config Debug
+cmake --build cmake-build-debug --target launcher --config Debug
 ```
 
-When using CLion, configure the CMake profile with:
-
-| Field | Value |
-| --- | --- |
-| Toolchain | Visual Studio |
-| Generator | Visual Studio 17 2022 |
-| Architecture | amd64 / x64 |
-| Build type | Debug |
-
-Build output is generated under the Visual Studio configuration directory:
+Run the launcher as administrator:
 
 ```text
-cmake-build-debug/
-  launcher/
-    Debug/
-      launcher.exe
-      plugin-core.dll
+cmake-build-debug\launcher\Debug\launcher.exe
 ```
 
-Run `launcher.exe` as administrator.
+DLL injection generally requires administrator privileges.
 
 ## Project Topology
 
-The codebase is split into two targets:
+The codebase is intentionally small again. There are two runtime targets:
 
 ```text
 launcher.exe
   starts the OSRS client
-  waits for basic GUI readiness
-  injects plugin-core.dll with LoadLibraryW
+  waits briefly for the client to become input-idle
+  resolves plugin-core.dll from the build output
+  stages a per-run temporary DLL copy
+  injects the staged DLL with LoadLibraryW
+  waits for the client process to exit
 
 plugin-core.dll
   runs inside the OSRS client process
@@ -79,8 +68,8 @@ plugin-core.dll
 
 ### State Ownership
 
-- `launcher` owns the OSRS process handle, primary thread handle, DLL path, and
-  injection lifecycle.
+- `launcher` owns the OSRS process handle, primary thread handle, plugin DLL
+  path resolution, staging path, and injection lifecycle.
 - `plugin-core` owns in-process patching, hook registration, and console
   logging after injection.
 - Hard-coded client RVAs live in `plugin-core/offsets.hpp` so client-version
@@ -88,15 +77,17 @@ plugin-core.dll
 
 ### Feedback
 
-- The launcher reports process launch and injection failures to its console.
-- The injected DLL opens its own debug console for patch/hook status.
-- A future UI shell should move this to IPC so logs can render inside the
-  launcher window instead of an `AllocConsole` window.
+- `launcher.exe` writes launch, staging, and injection status to its console.
+- `plugin-core.dll` opens its own debug console after injection and writes
+  patch/hook diagnostics there.
 
 ### Timing
 
 - The launcher uses `WaitForInputIdle` before injection instead of a fixed
   startup sleep.
+- The launcher stages `plugin-core.dll` to a unique temp-file path before
+  injection. This keeps the build output DLL from being locked by the running
+  OSRS process.
 - The DLL does minimal work in `DllMain`, then starts a worker thread for
   console setup, patching, and hook installation.
 
@@ -110,6 +101,8 @@ plugin-core.dll
 │   ├── dll_injector.cpp
 │   ├── dll_injector.hpp
 │   ├── main.cpp
+│   ├── plugin_stager.cpp
+│   ├── plugin_stager.hpp
 │   ├── process_launcher.cpp
 │   ├── process_launcher.hpp
 │   └── win32_handle.hpp
@@ -141,32 +134,36 @@ and patch logic in `.cpp` files for that reason.
 ## Prerequisites
 
 - Windows 10/11
-- Visual Studio Build Tools 2022 with Desktop development with C++
+- Visual Studio 2022 or Build Tools 2022
+- Desktop development with C++
 - Windows 10 or Windows 11 SDK
 - CMake 3.26+
 - Git
-- CLion or another CMake-aware IDE
+- CLion, Visual Studio, or another CMake-aware IDE
 
-The project uses C++20 and fetches [MinHook](https://github.com/TsudaKageyu/minhook)
-with CMake `FetchContent`.
+The native project uses C++20 and fetches
+[MinHook](https://github.com/TsudaKageyu/minhook) with CMake `FetchContent`.
 
 ## Configuring The Client Path
 
-The launcher currently uses a hard-coded default client path in:
-
-```cpp
-launcher/main.cpp
-```
-
-Update `kDefaultClientPath` if your OSRS native client is installed elsewhere:
+The launcher currently uses a default client path in `launcher/main.cpp`:
 
 ```cpp
 constexpr wchar_t kDefaultClientPath[] =
     L"C:\\Program Files (x86)\\Jagex Launcher\\Games\\Old School RuneScape\\Client\\osclient.exe";
 ```
 
-The DLL path is resolved at runtime relative to `launcher.exe`, and the build
-copies `plugin-core.dll` next to the executable.
+For manual testing, override it with:
+
+```shell
+launcher.exe --client "C:\path\to\osclient.exe"
+```
+
+You can also override the plugin DLL path:
+
+```shell
+launcher.exe --plugin "C:\path\to\plugin-core.dll"
+```
 
 ## Building
 
@@ -174,7 +171,7 @@ From a Visual Studio developer shell:
 
 ```shell
 cmake -S . -B cmake-build-debug -G "Visual Studio 17 2022" -A x64
-cmake --build cmake-build-debug --config Debug
+cmake --build cmake-build-debug --target launcher --config Debug
 ```
 
 From CLion:
@@ -184,26 +181,30 @@ From CLion:
 3. Reload CMake.
 4. Build the `launcher` target.
 
-Building `launcher` also builds `plugin-core` and copies the DLL beside the
-launcher executable.
+Building `launcher` also builds `plugin-core`. The launcher resolves
+`plugin-core.dll` from either:
+
+```text
+cmake-build-debug\launcher\Debug\plugin-core.dll
+cmake-build-debug\plugin-core\Debug\plugin-core.dll
+```
+
+The second path is the normal CLion/Visual Studio CMake output after this
+backtrack.
 
 ## Running
 
-DLL injection generally requires administrator privileges.
-
-```text
-cmake-build-debug/launcher/Debug/launcher.exe
-```
-
-Right-click `launcher.exe` and select `Run as administrator`.
+Run `launcher.exe` as administrator.
 
 Expected flow:
 
 1. `launcher.exe` starts the OSRS native client.
 2. The launcher waits for the client to become input-idle.
-3. The launcher injects `plugin-core.dll`.
-4. `plugin-core.dll` opens a debug console.
-5. The DLL applies patches and installs hooks.
+3. The launcher copies `plugin-core.dll` to a unique temp path.
+4. The launcher injects the staged DLL with `LoadLibraryW`.
+5. `plugin-core.dll` opens a debug console.
+6. The DLL applies patches and installs hooks.
+7. The launcher process waits until the client exits.
 
 ## Current Native API Surface
 
@@ -213,6 +214,7 @@ Expected flow:
   directory.
 - `DllInjector` writes the DLL path into the target process and calls
   `LoadLibraryW` through a remote thread.
+- `PluginStager` copies the built DLL to a unique temp path before injection.
 - `UniqueHandle` provides RAII ownership for Win32 `HANDLE` values.
 
 ### Plugin Core
@@ -229,49 +231,41 @@ This is still a prototype foundation.
 
 - RVAs are client-version dependent and must be verified after OSRS updates.
 - The current log hook depends on a specific observed string layout.
-- The debug console is temporary; a UI shell should receive logs through IPC.
-- There is no plugin manager, config system, event bus, or embedded client
-  frame yet.
+- There is no UI shell, plugin manager, config system, or event bus.
 - There are no automated tests yet because the core behavior depends on a live
   Windows process and injected DLL lifecycle.
-
-## UI Roadmap
-
-The next major phase should add a desktop launcher shell around this topology:
-
-```text
-Qt QMainWindow
-  top toolbar
-  central embedded OSRS HWND
-  sidebar dock for plugins/configuration
-  bottom dock for logs/console output
-```
-
-Qt Widgets is the recommended starting point because it provides dock widgets,
-toolbars, native window hosting, and a stable path toward a RuneLite-style
-desktop frame.
 
 ## Development Workflow
 
 1. Update or add code in the narrowest target that owns the behavior.
-2. Keep headers as declarations unless code is intentionally header-only.
-3. Keep hard-coded offsets in `plugin-core/offsets.hpp`.
-4. Rebuild with `cmake --build cmake-build-debug --config Debug`.
-5. Close the OSRS client fully before reinjecting a rebuilt DLL.
-6. Run `launcher.exe` as administrator and check both launcher and DLL logs.
+2. Keep launcher-side process and injection logic in `launcher`.
+3. Keep injected patching and hooks in `plugin-core`.
+4. Keep headers as declarations unless code is intentionally header-only.
+5. Keep hard-coded offsets in `plugin-core/offsets.hpp`.
+6. Rebuild with `cmake --build cmake-build-debug --target launcher --config Debug`.
+7. Run `launcher.exe` as administrator and check both launcher and DLL console
+   logs.
 
 ## Troubleshooting
 
 ### The DLL console does not appear
 
 - Confirm that `launcher.exe` was run as administrator.
-- Confirm `plugin-core.dll` exists beside `launcher.exe`.
 - Confirm the OSRS client path is correct.
+- Confirm `plugin-core.dll` exists under the CMake `plugin-core` output
+  directory for the same configuration.
 - Check the launcher console for injection errors.
+
+### Rebuild fails because plugin-core.dll is locked
+
+New launcher runs inject a staged temp DLL instead of the build output DLL. If
+you still see a locked build-output DLL, close any OSRS process that was
+launched before the staging change and rebuild.
 
 ### The launcher says the client path does not exist
 
-Update `kDefaultClientPath` in `launcher/main.cpp`.
+Update `kDefaultClientPath` in `launcher/main.cpp`, or run the launcher with
+`--client`.
 
 ### The client closes or crashes after injection
 
@@ -292,10 +286,10 @@ Install Visual Studio Build Tools 2022 and include:
 
 ## Built With
 
-- [C++20](https://isocpp.org/) - Core language
+- [C++20](https://isocpp.org/) - Native launcher and injected plugin core
 - [CMake](https://cmake.org/) - Build system
 - [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/) - Windows compiler/toolchain
-- [Win32 API](https://learn.microsoft.com/en-us/windows/win32/) - Process, memory, and window integration
+- [Win32 API](https://learn.microsoft.com/en-us/windows/win32/) - Process and memory integration
 - [MinHook](https://github.com/TsudaKageyu/minhook) - Native function hooking
 
 ---

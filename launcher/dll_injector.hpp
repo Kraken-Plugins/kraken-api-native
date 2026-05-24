@@ -11,6 +11,7 @@
 
 #include <chrono>
 #include <filesystem>
+#include <string>
 
 namespace kraken::launcher {
 
@@ -19,7 +20,8 @@ public:
     static bool Inject(HANDLE process,
                        DWORD processId,
                        const std::filesystem::path& dllPath,
-                       std::chrono::milliseconds timeout);
+                       std::chrono::milliseconds timeout,
+                       std::string* errorMessage = nullptr);
 };
 
 } // namespace kraken::launcher
