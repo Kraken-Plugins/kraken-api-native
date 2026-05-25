@@ -52,6 +52,7 @@ int wmain(int argc, wchar_t** argv) {
         std::filesystem::path clientPath(kDefaultClientPath);
         std::filesystem::path pluginPath =
             ResolvePluginPath(ProcessLauncher::CurrentExecutableDirectory());
+        std::wstring pipeName;
 
         for (int i = 1; i < argc; ++i) {
             const std::wstring argument(argv[i]);
@@ -59,14 +60,22 @@ int wmain(int argc, wchar_t** argv) {
                 clientPath = argv[++i];
             } else if (argument == L"--plugin" && i + 1 < argc) {
                 pluginPath = argv[++i];
+            } else if (argument == L"--pipe" && i + 1 < argc) {
+                pipeName = argv[++i];
             }
         }
 
         std::wcout << L"[*] Client path: " << clientPath << L"\n";
         std::wcout << L"[*] Plugin source: " << pluginPath << L"\n";
+        if (!pipeName.empty()) {
+            std::wcout << L"[*] IPC pipe: " << pipeName << L"\n";
+            SetEnvironmentVariableW(L"KRAKEN_PIPE_NAME", pipeName.c_str());
+        }
 
         auto client = ProcessLauncher::LaunchClient(clientPath);
         std::wcout << L"[+] Client launched. PID: " << client.processId
+                   << L"\n";
+        std::wcout << L"[kraken:event] client_pid=" << client.processId
                    << L"\n";
 
         if (!ProcessLauncher::WaitForInputIdle(client.process.Get(),

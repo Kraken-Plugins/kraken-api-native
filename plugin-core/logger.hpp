@@ -1,10 +1,34 @@
 #pragma once
 
+#include <functional>
+#include <string>
 #include <string_view>
+#include <vector>
 
 namespace kraken::plugin {
 
-void InitializeConsole();
+enum class LogLevel {
+    Info,
+    Warn,
+    Error,
+};
+
+struct LogRecord {
+    LogLevel level;
+    std::string message;
+};
+
+using LogSink = std::function<void(const LogRecord&)>;
+
+void InitializeLogging();
+
+void InitializeDebugConsole();
+
+void SetLogSink(LogSink sink);
+
+std::vector<LogRecord> SnapshotBufferedLogs();
+
+std::string_view LogLevelName(LogLevel level);
 
 void LogInfo(std::string_view message);
 

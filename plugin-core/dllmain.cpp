@@ -8,11 +8,27 @@
 #include <Windows.h>
 
 #include "hooks.hpp"
+#include "ipc_server.hpp"
 #include "logger.hpp"
 #include "offsets.hpp"
 #include "patcher.hpp"
 
+#include <string>
+
 namespace {
+
+// Process-lifetime server; avoid joining worker threads during DLL detach.
+kraken::plugin::IpcServer* g_ipcServer = nullptr;
+
+bool IsDebugConsoleRequested() {
+    wchar_t value[8]{};
+    const DWORD length = GetEnvironmentVariableW(
+        L"KRAKEN_DEBUG_CONSOLE",
+        value,
+        static_cast<DWORD>(sizeof(value) / sizeof(value[0])));
+
+    return length > 0 && value[0] == L'1';
+}
 
 bool ApplyInitialPatches() {
     const std::uintptr_t patchAddress =
@@ -23,12 +39,26 @@ bool ApplyInitialPatches() {
 }
 
 void PluginMain() {
-    kraken::plugin::InitializeConsole();
+    kraken::plugin::InitializeLogging();
+    if (IsDebugConsoleRequested()) {
+        kraken::plugin::InitializeDebugConsole();
+    }
 
     kraken::plugin::LogInfo("==============================");
     kraken::plugin::LogInfo("plugin-core loaded.");
     kraken::plugin::LogInfo("DLL injection is working.");
     kraken::plugin::LogInfo("==============================");
+
+    const std::wstring pipeName = kraken::plugin::ResolveConfiguredPipeName();
+    if (!pipeName.empty()) {
+        g_ipcServer = new kraken::plugin::IpcServer();
+        if (!g_ipcServer->Start(pipeName)) {
+            kraken::plugin::LogWarn("IPC server was already running.");
+        }
+    } else {
+        kraken::plugin::LogWarn(
+            "KRAKEN_PIPE_NAME was not set; UI IPC is disabled.");
+    }
 
     kraken::plugin::LogInfo("Applying patches...");
     if (!ApplyInitialPatches()) {

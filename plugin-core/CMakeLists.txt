@@ -11,6 +11,8 @@ add_library(plugin-core SHARED
         dllmain.cpp
         hooks.cpp
         hooks.hpp
+        ipc_server.cpp
+        ipc_server.hpp
         logger.cpp
         logger.hpp
         offsets.hpp

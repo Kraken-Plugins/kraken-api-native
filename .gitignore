@@ -4,6 +4,7 @@
 .idea
 *.iml
 .idea/*
+.gradle/
 .env
 .DS_STORE
 

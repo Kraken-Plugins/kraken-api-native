@@ -48,12 +48,20 @@ DLL injection generally requires administrator privileges.
 
 ## Project Topology
 
-The codebase is intentionally small again. There are two runtime targets:
+The codebase has native injection targets plus a Java Swing UI shell:
 
 ```text
+kraken-ui
+  starts the RuneLite-style Swing shell
+  launches launcher.exe with a per-session named pipe
+  connects to plugin-core.dll over IPC
+  streams native logs into the bottom log pane
+  sends the first proof command: client.windowTitle.set
+
 launcher.exe
   starts the OSRS client
   waits briefly for the client to become input-idle
+  passes KRAKEN_PIPE_NAME into the child process when requested
   resolves plugin-core.dll from the build output
   stages a per-run temporary DLL copy
   injects the staged DLL with LoadLibraryW
@@ -61,25 +69,34 @@ launcher.exe
 
 plugin-core.dll
   runs inside the OSRS client process
-  opens a debug console
+  buffers logs and optionally forwards them over IPC
+  opens a debug console only when KRAKEN_DEBUG_CONSOLE=1
   applies in-process patches
   installs native hooks
+
+kraken-ui-native.dll
+  optional JNI helper for finding and reparenting Win32 HWNDs
+  enables embedding the OSRS window inside the Swing GamePanel
 ```
 
 ### State Ownership
 
 - `launcher` owns the OSRS process handle, primary thread handle, plugin DLL
   path resolution, staging path, and injection lifecycle.
-- `plugin-core` owns in-process patching, hook registration, and console
-  logging after injection.
+- `kraken-ui` owns UI state, plugin-facing Java calls, launcher process
+  orchestration, and log display.
+- `plugin-core` owns in-process patching, hook registration, command handling,
+  and native log production after injection.
 - Hard-coded client RVAs live in `plugin-core/offsets.hpp` so client-version
   dependent addresses are easy to audit.
 
 ### Feedback
 
 - `launcher.exe` writes launch, staging, and injection status to its console.
-- `plugin-core.dll` opens its own debug console after injection and writes
-  patch/hook diagnostics there.
+- `plugin-core.dll` buffers patch/hook diagnostics and forwards them to the UI
+  named pipe once the Swing process connects.
+- `KRAKEN_DEBUG_CONSOLE=1` opts into the old DLL-side console for native
+  debugging.
 
 ### Timing
 
@@ -89,7 +106,7 @@ plugin-core.dll
   injection. This keeps the build output DLL from being locked by the running
   OSRS process.
 - The DLL does minimal work in `DllMain`, then starts a worker thread for
-  console setup, patching, and hook installation.
+  logging setup, IPC startup, patching, and hook installation.
 
 ## Source Layout
 
@@ -106,16 +123,27 @@ plugin-core.dll
 │   ├── process_launcher.cpp
 │   ├── process_launcher.hpp
 │   └── win32_handle.hpp
-└── plugin-core/
+├── plugin-core/
     ├── CMakeLists.txt
     ├── dllmain.cpp
     ├── hooks.cpp
     ├── hooks.hpp
+    ├── ipc_server.cpp
+    ├── ipc_server.hpp
     ├── logger.cpp
     ├── logger.hpp
     ├── offsets.hpp
     ├── patcher.cpp
     └── patcher.hpp
+├── kraken-ui/
+│   └── src/main/java/com/kraken/
+├── scripts/
+│   ├── build-native.cmd
+│   ├── build-ui.cmd
+│   └── run-ui.cmd
+└── ui-native/
+    ├── CMakeLists.txt
+    └── ui_native.cpp
 ```
 
 ## C++ File Structure
@@ -138,6 +166,7 @@ and patch logic in `.cpp` files for that reason.
 - Desktop development with C++
 - Windows 10 or Windows 11 SDK
 - CMake 3.26+
+- JDK 11+ for the Swing launcher UI
 - Git
 - CLion, Visual Studio, or another CMake-aware IDE
 
@@ -170,8 +199,20 @@ launcher.exe --plugin "C:\path\to\plugin-core.dll"
 From a Visual Studio developer shell:
 
 ```shell
-cmake -S . -B cmake-build-debug -G "Visual Studio 17 2022" -A x64
-cmake --build cmake-build-debug --target launcher --config Debug
+scripts\build-native.cmd
+scripts\build-ui.cmd
+```
+
+The UI is Java 11 source. These scripts intentionally use `javac`/`java`
+directly so a Gradle installation that requires Java 17 is not on the runtime
+path.
+
+If you build from WSL, invoke the Windows scripts through `cmd.exe` so CMake
+uses Windows paths consistently:
+
+```shell
+cmd.exe /C '.\scripts\build-native.cmd'
+cmd.exe /C '.\scripts\build-ui.cmd'
 ```
 
 From CLion:
@@ -194,7 +235,7 @@ backtrack.
 
 ## Running
 
-Run `launcher.exe` as administrator.
+For the native-only path, run `launcher.exe` as administrator.
 
 Expected flow:
 
@@ -202,9 +243,26 @@ Expected flow:
 2. The launcher waits for the client to become input-idle.
 3. The launcher copies `plugin-core.dll` to a unique temp path.
 4. The launcher injects the staged DLL with `LoadLibraryW`.
-5. `plugin-core.dll` opens a debug console.
-6. The DLL applies patches and installs hooks.
-7. The launcher process waits until the client exits.
+5. The DLL applies patches and installs hooks.
+6. The launcher process waits until the client exits.
+
+For the Swing launcher path, run the Java application as administrator:
+
+```shell
+scripts\run-ui.cmd
+```
+
+Expected UI flow:
+
+1. The Swing UI starts `launcher.exe` with a per-session named pipe.
+2. `launcher.exe` passes that pipe name to `osclient.exe` through the child
+   environment.
+3. `plugin-core.dll` creates the pipe server after injection.
+4. The Swing UI connects as the pipe client.
+5. Native logs stream into the bottom log pane.
+6. The `Set Title` action calls Java `NativeClient.setWindowTitle(...)`, sends
+   `client.windowTitle.set` over IPC, and `plugin-core.dll` changes the OSRS
+   window title from inside the injected process.
 
 ## Current Native API Surface
 
@@ -216,14 +274,26 @@ Expected flow:
   `LoadLibraryW` through a remote thread.
 - `PluginStager` copies the built DLL to a unique temp path before injection.
 - `UniqueHandle` provides RAII ownership for Win32 `HANDLE` values.
+- `--pipe` passes a UI-owned named pipe into the client environment for
+  `plugin-core.dll` to connect back to after injection.
 
 ### Plugin Core
 
 - `Patcher` changes memory protection, writes patch bytes, flushes the
   instruction cache, and restores protection.
 - `InstallLogHook` installs the current native log hook through MinHook.
-- `Logger` owns console initialization and thread-safe log output.
+- `Logger` owns thread-safe log buffering and forwards logs to a configured
+  sink. Set `KRAKEN_DEBUG_CONSOLE=1` to opt into a debug console.
+- `IpcServer` owns the named-pipe bridge from the injected DLL back to the
+  Swing UI.
 - `offsets.hpp` centralizes hard-coded RVAs.
+
+### Swing UI
+
+- `kraken-ui` owns the RuneLite-style shell, log pane, launcher process
+  orchestration, and the thin Java-facing native API proof.
+- `ui-native` optionally exposes Win32 HWND helpers for embedding the OSRS
+  window into the Java `GamePanel`.
 
 ## Known Boundaries
 
@@ -231,7 +301,11 @@ This is still a prototype foundation.
 
 - RVAs are client-version dependent and must be verified after OSRS updates.
 - The current log hook depends on a specific observed string layout.
-- There is no UI shell, plugin manager, config system, or event bus.
+- The plugin manager and config system are only UI groundwork right now.
+- The first Java API proof is intentionally small:
+  `NativeClient.setWindowTitle(...)` sends one command to the injected DLL.
+  Real game mutations should be queued and executed from a verified
+  game-safe hook point.
 - There are no automated tests yet because the core behavior depends on a live
   Windows process and injected DLL lifecycle.
 
@@ -242,19 +316,21 @@ This is still a prototype foundation.
 3. Keep injected patching and hooks in `plugin-core`.
 4. Keep headers as declarations unless code is intentionally header-only.
 5. Keep hard-coded offsets in `plugin-core/offsets.hpp`.
-6. Rebuild with `cmake --build cmake-build-debug --target launcher --config Debug`.
-7. Run `launcher.exe` as administrator and check both launcher and DLL console
-   logs.
+6. Rebuild native targets with `scripts\build-native.cmd`.
+7. Rebuild the Swing UI with `scripts\build-ui.cmd`.
+8. Run `scripts\run-ui.cmd` as administrator and check the UI log pane.
 
 ## Troubleshooting
 
-### The DLL console does not appear
+### Logs do not appear in the UI
 
 - Confirm that `launcher.exe` was run as administrator.
 - Confirm the OSRS client path is correct.
 - Confirm `plugin-core.dll` exists under the CMake `plugin-core` output
   directory for the same configuration.
 - Check the launcher console for injection errors.
+- Set `KRAKEN_DEBUG_CONSOLE=1` before launching if you need the old DLL-side
+  debug console while diagnosing IPC startup.
 
 ### Rebuild fails because plugin-core.dll is locked
 
@@ -281,6 +357,12 @@ Install Visual Studio Build Tools 2022 and include:
 - Windows 10 or Windows 11 SDK
 - CMake tools for Windows
 - Desktop development with C++
+
+### CMake reports a CMakeCache path mismatch
+
+Do not mix WSL/Linux CMake paths and Windows Visual Studio CMake paths in the
+same `cmake-build-debug` directory. Use `scripts\build-native.cmd` from a
+Windows shell, or run `cmd.exe /C '.\scripts\build-native.cmd'` from WSL.
 
 ---
 

@@ -7,3 +7,4 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_subdirectory(plugin-core)
 add_subdirectory(launcher)
+add_subdirectory(ui-native)
