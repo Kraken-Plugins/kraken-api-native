@@ -209,8 +209,16 @@ bool SetCurrentProcessWindowTitle(std::string_view title,
         return false;
     }
 
-    if (!SetWindowTextW(window, wideTitle.c_str())) {
-        errorMessage = "SetWindowTextW failed with Win32 error " +
+    DWORD_PTR result = 0;
+    if (!SendMessageTimeoutW(
+            window,
+            WM_SETTEXT,
+            0,
+            reinterpret_cast<LPARAM>(wideTitle.c_str()),
+            SMTO_ABORTIFHUNG | SMTO_BLOCK,
+            1000,
+            &result)) {
+        errorMessage = "WM_SETTEXT timed out or failed with Win32 error " +
                        std::to_string(GetLastError());
         return false;
     }
@@ -284,6 +292,7 @@ void IpcServer::Run(std::wstring pipeName) {
     }
 
     LogInfo("IPC UI connected.");
+    SendClientProcessEvent();
     SetLogSink([this](const LogRecord& record) {
         SendLog(record);
     });
@@ -371,6 +380,15 @@ void IpcServer::SendLog(const LogRecord& record) {
            << LogLevelName(record.level)
            << "\",\"message\":\""
            << JsonEscape(record.message)
+           << "\"}\n";
+
+    SendLine(stream.str());
+}
+
+void IpcServer::SendClientProcessEvent() {
+    std::ostringstream stream;
+    stream << "{\"v\":1,\"type\":\"client\",\"pid\":\""
+           << GetCurrentProcessId()
            << "\"}\n";
 
     SendLine(stream.str());

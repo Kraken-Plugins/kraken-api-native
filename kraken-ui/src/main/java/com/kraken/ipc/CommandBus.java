@@ -5,10 +5,17 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
 
 public final class CommandBus {
     private final PipeClient pipeClient;
+    private final ExecutorService writer = Executors.newSingleThreadExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "kraken-command-writer");
+        thread.setDaemon(true);
+        return thread;
+    });
     private final AtomicLong nextId = new AtomicLong(1);
     private final ConcurrentHashMap<String, CompletableFuture<NativeResult>> pending =
         new ConcurrentHashMap<>();
@@ -34,12 +41,14 @@ public final class CommandBus {
         CompletableFuture<NativeResult> future = new CompletableFuture<>();
         pending.put(id, future);
 
-        try {
-            pipeClient.writeLine(Protocol.command(id, name, fields));
-        } catch (IOException ex) {
-            pending.remove(id);
-            future.completeExceptionally(ex);
-        }
+        writer.execute(() -> {
+            try {
+                pipeClient.writeLine(Protocol.command(id, name, fields));
+            } catch (IOException ex) {
+                pending.remove(id);
+                future.completeExceptionally(ex);
+            }
+        });
 
         return future;
     }

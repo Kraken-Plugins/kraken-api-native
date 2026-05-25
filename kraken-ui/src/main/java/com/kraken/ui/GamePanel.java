@@ -19,6 +19,7 @@ final class GamePanel extends JPanel {
     private final Canvas canvas = new Canvas();
     private final JLabel statusLabel = new JLabel("Client not launched", SwingConstants.CENTER);
     private final BiConsumer<String, String> logSink;
+    private long attachedProcessId;
     private long embeddedWindow;
 
     GamePanel(BiConsumer<String, String> logSink) {
@@ -40,16 +41,29 @@ final class GamePanel extends JPanel {
     }
 
     void attachToProcess(long processId) {
+        if (attachedProcessId == processId) {
+            return;
+        }
+
+        attachedProcessId = processId;
+        statusLabel.setText("Client launched; waiting for window");
+
         if (!Win32Window.isAvailable()) {
             statusLabel.setText("Game launched outside embedded view");
             logSink.accept("WARN", "kraken-ui-native.dll was not found; window embedding is disabled.");
             return;
         }
 
-        remove(statusLabel);
+        if (statusLabel.getParent() == this) {
+            remove(statusLabel);
+        }
+
         canvas.setBackground(Color.BLACK);
         canvas.setPreferredSize(new Dimension(800, 600));
-        add(canvas, BorderLayout.CENTER);
+        if (canvas.getParent() != this) {
+            add(canvas, BorderLayout.CENTER);
+        }
+
         revalidate();
         repaint();
 
@@ -69,6 +83,14 @@ final class GamePanel extends JPanel {
             }
 
             if (attempts[0] >= 60) {
+                if (canvas.getParent() == this) {
+                    remove(canvas);
+                    add(statusLabel, BorderLayout.CENTER);
+                    statusLabel.setText("Game launched outside embedded view");
+                    revalidate();
+                    repaint();
+                }
+
                 logSink.accept("WARN", "Timed out waiting for the OSRS window to become embeddable.");
                 timer.stop();
             }

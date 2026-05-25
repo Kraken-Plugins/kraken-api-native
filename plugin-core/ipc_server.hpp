@@ -38,6 +38,8 @@ private:
 
     void SendLog(const LogRecord& record);
 
+    void SendClientProcessEvent();
+
     void SendResult(std::string_view id,
                     bool ok,
                     std::string_view message);

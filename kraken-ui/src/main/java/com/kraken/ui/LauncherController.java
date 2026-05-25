@@ -93,7 +93,7 @@ final class LauncherController {
                 String line;
                 while ((line = bufferedReader.readLine()) != null) {
                     logSink.accept("LAUNCHER", line);
-                    parseClientPid(line).ifPresent(clientPidConsumer);
+                    parseClientPid(line).ifPresent(this::publishClientPid);
                 }
             } catch (IOException ex) {
                 logSink.accept("WARN", "Launcher output reader stopped: " + ex.getMessage());
@@ -142,7 +142,18 @@ final class LauncherController {
             String level = Protocol.stringField(line, "level").orElse("INFO");
             String message = Protocol.stringField(line, "message").orElse("");
             logSink.accept(level, message);
+            return;
         }
+
+        if (type.isPresent() && "client".equals(type.get())) {
+            Protocol.stringField(line, "pid")
+                .flatMap(LauncherController::parseLong)
+                .ifPresent(this::publishClientPid);
+        }
+    }
+
+    private void publishClientPid(long processId) {
+        SwingUtilities.invokeLater(() -> clientPidConsumer.accept(processId));
     }
 
     private static Optional<Long> parseClientPid(String line) {
@@ -152,6 +163,14 @@ final class LauncherController {
         }
 
         return Optional.of(Long.parseLong(matcher.group(1)));
+    }
+
+    private static Optional<Long> parseLong(String value) {
+        try {
+            return Optional.of(Long.parseLong(value));
+        } catch (NumberFormatException ex) {
+            return Optional.empty();
+        }
     }
 
     private static void sleep(long millis) {

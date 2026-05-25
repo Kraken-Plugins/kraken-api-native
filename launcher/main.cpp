@@ -76,7 +76,8 @@ int wmain(int argc, wchar_t** argv) {
         std::wcout << L"[+] Client launched. PID: " << client.processId
                    << L"\n";
         std::wcout << L"[kraken:event] client_pid=" << client.processId
-                   << L"\n";
+                   << L"\n"
+                   << std::flush;
 
         if (!ProcessLauncher::WaitForInputIdle(client.process.Get(),
                                                kClientReadyTimeout)) {

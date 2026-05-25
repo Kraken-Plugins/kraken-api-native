@@ -137,10 +137,6 @@ kraken-ui-native.dll
     └── patcher.hpp
 ├── kraken-ui/
 │   └── src/main/java/com/kraken/
-├── scripts/
-│   ├── build-native.cmd
-│   ├── build-ui.cmd
-│   └── run-ui.cmd
 └── ui-native/
     ├── CMakeLists.txt
     └── ui_native.cpp
@@ -196,31 +192,18 @@ launcher.exe --plugin "C:\path\to\plugin-core.dll"
 
 ## Building
 
-From a Visual Studio developer shell:
-
-```shell
-scripts\build-native.cmd
-scripts\build-ui.cmd
-```
-
-The UI is Java 11 source. These scripts intentionally use `javac`/`java`
-directly so a Gradle installation that requires Java 17 is not on the runtime
-path.
-
-If you build from WSL, invoke the Windows scripts through `cmd.exe` so CMake
-uses Windows paths consistently:
-
-```shell
-cmd.exe /C '.\scripts\build-native.cmd'
-cmd.exe /C '.\scripts\build-ui.cmd'
-```
-
 From CLion:
 
 1. Open the repository.
-2. Configure the toolchain as Visual Studio x64.
+2. Configure the CMake profile with the Windows Visual Studio toolchain.
 3. Reload CMake.
 4. Build the `launcher` target.
+5. Build the `kraken-ui-native` target.
+6. Build the `kraken-ui-classes` target.
+
+The UI is Java 11 source. The CMake `kraken-ui-classes` target uses `javac`
+directly, so a Gradle installation that requires Java 17 is not on this UI
+runtime path.
 
 Building `launcher` also builds `plugin-core`. The launcher resolves
 `plugin-core.dll` from either:
@@ -249,7 +232,7 @@ Expected flow:
 For the Swing launcher path, run the Java application as administrator:
 
 ```shell
-scripts\run-ui.cmd
+cmake --build cmake-build-debug --target run-kraken-ui --config Debug
 ```
 
 Expected UI flow:
@@ -316,9 +299,10 @@ This is still a prototype foundation.
 3. Keep injected patching and hooks in `plugin-core`.
 4. Keep headers as declarations unless code is intentionally header-only.
 5. Keep hard-coded offsets in `plugin-core/offsets.hpp`.
-6. Rebuild native targets with `scripts\build-native.cmd`.
-7. Rebuild the Swing UI with `scripts\build-ui.cmd`.
-8. Run `scripts\run-ui.cmd` as administrator and check the UI log pane.
+6. Rebuild native targets from the CLion CMake profile.
+7. Rebuild the Swing UI with the `kraken-ui-classes` CMake target.
+8. Run `run-kraken-ui` or a Java Application config with the project root as
+   the working directory and check the UI log pane.
 
 ## Troubleshooting
 
@@ -361,8 +345,9 @@ Install Visual Studio Build Tools 2022 and include:
 ### CMake reports a CMakeCache path mismatch
 
 Do not mix WSL/Linux CMake paths and Windows Visual Studio CMake paths in the
-same `cmake-build-debug` directory. Use `scripts\build-native.cmd` from a
-Windows shell, or run `cmd.exe /C '.\scripts\build-native.cmd'` from WSL.
+same `cmake-build-debug` directory. For this project, the binaries must be
+Windows binaries because they inject into `osclient.exe`; use CLion's Windows
+Visual Studio CMake profile or run Windows CMake with a Windows build path.
 
 ---
 
